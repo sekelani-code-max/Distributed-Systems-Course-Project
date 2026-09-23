@@ -11,15 +11,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Election {
     private final int nodeId;
-    private final List<Integer> peerPorts;
+    private final List<String> peerAddresses;
     private int currentLeaderId;
     private boolean isElectionInProgress = false;
+    private final String internalSecret;
     private final HttpClient client = HttpClient.newHttpClient();
 
-    public Election(int nodeId, List<Integer> peerPorts) {
+    public Election(int nodeId, List<String> peerAddresses, String internalSecret) {
         this.nodeId = nodeId;
-        this.peerPorts = peerPorts;
-        this.currentLeaderId = peerPorts.size() - 1; // Highest ID is initial host
+        this.peerAddresses = peerAddresses;
+        this.internalSecret = internalSecret;
+        this.currentLeaderId = peerAddresses.size() - 1; // Highest ID is initial host
     }
 
     public synchronized void startElection() {
@@ -29,9 +31,9 @@ public class Election {
 
         new Thread(() -> {
             AtomicBoolean receivedOk = new AtomicBoolean(false);
-            CompletableFuture<?>[] futures = peerPorts.stream()
-                .filter(port -> getPeerIdFromPort(port) > nodeId)
-                .map(port -> sendElectionMessage(port, "ELECTION")
+            CompletableFuture<?>[] futures = java.util.stream.IntStream.range(0, peerAddresses.size())
+                .filter(peerId -> peerId > nodeId)
+                .mapToObj(peerId -> sendElectionMessage(peerId, "ELECTION")
                     .thenAccept(res -> {
                         if (res != null && res.statusCode() == 200) {
                             receivedOk.set(true);
@@ -58,9 +60,9 @@ public class Election {
         System.out.println("Node " + nodeId + " is now the COORDINATOR!");
 
         // Broadcast COORDINATOR message to all peers
-        for (int port : peerPorts) {
-            if (getPeerIdFromPort(port) != nodeId) {
-                sendElectionMessage(port, "COORDINATOR");
+        for (int peerId = 0; peerId < peerAddresses.size(); peerId++) {
+            if (peerId != nodeId) {
+                sendElectionMessage(peerId, "COORDINATOR");
             }
         }
     }
@@ -78,21 +80,18 @@ public class Election {
         System.out.println("New Leader recognized: Node " + newLeaderId);
     }
 
-    private CompletableFuture<HttpResponse<String>> sendElectionMessage(int port, String type) {
+    private CompletableFuture<HttpResponse<String>> sendElectionMessage(int peerId, String type) {
         String payload = String.format("{\"type\":\"%s\",\"sender_id\":%d}", type, nodeId);
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + port + "/api/election"))
+                .uri(URI.create("http://" + peerAddresses.get(peerId) + "/api/election"))
                 .header("Content-Type", "application/json")
+                .header("X-Internal-Secret", internalSecret)
                 .POST(HttpRequest.BodyPublishers.ofString(payload))
                 .timeout(Duration.ofSeconds(1))
                 .build();
 
         return client.sendAsync(request, HttpResponse.BodyHandlers.ofString())
                 .exceptionally(ex -> null);
-    }
-
-    private int getPeerIdFromPort(int port) {
-        return peerPorts.indexOf(port);
     }
 
     public int getCurrentLeaderId() { return currentLeaderId; }

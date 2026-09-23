@@ -8,16 +8,18 @@ import java.time.Duration;
 
 public class MutualExclusion {
     private final int nodeId;
-    private final int nextPeerPort;
+    private final String nextPeerAddress;
     private boolean wantsToUpdateScore = false;
     private boolean hasToken = false;
     private String scoreData = "{}";
+    private final String internalSecret;
     private final HttpClient client = HttpClient.newHttpClient();
 
-    public MutualExclusion(int nodeId, int nextPeerPort, boolean startsWithToken) {
+    public MutualExclusion(int nodeId, String nextPeerAddress, boolean startsWithToken, String internalSecret) {
         this.nodeId = nodeId;
-        this.nextPeerPort = nextPeerPort;
+        this.nextPeerAddress = nextPeerAddress;
         this.hasToken = startsWithToken;
+        this.internalSecret = internalSecret;
     }
 
     public synchronized void requestCriticalSection() {
@@ -57,8 +59,9 @@ public class MutualExclusion {
             try {
                 String payload = String.format("{\"token_holder\":%d,\"scores\":%s}", nodeId, scoreData);
                 HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create("http://localhost:" + nextPeerPort + "/api/token"))
+                        .uri(URI.create("http://" + nextPeerAddress + "/api/token"))
                         .header("Content-Type", "application/json")
+                        .header("X-Internal-Secret", internalSecret)
                         .POST(HttpRequest.BodyPublishers.ofString(payload))
                         .timeout(Duration.ofSeconds(2))
                         .build();
@@ -66,11 +69,23 @@ public class MutualExclusion {
                 client.send(request, HttpResponse.BodyHandlers.discarding());
             } catch (Exception e) {
                 // If next peer is unreachable, retry or hold token temporarily
-                System.err.println("Node " + nodeId + " failed to pass token to port " + nextPeerPort);
+                System.err.println("Node " + nodeId + " failed to pass token to " + nextPeerAddress);
                 synchronized (MutualExclusion.this) {
                     this.hasToken = true;
                 }
             }
         }).start();
+    }
+
+    public synchronized boolean hasToken() {
+        return hasToken;
+    }
+
+    public synchronized boolean isWaiting() {
+        return wantsToUpdateScore;
+    }
+
+    public synchronized String getScoreData() {
+        return scoreData;
     }
 }

@@ -1,2 +1,7 @@
 bin/
 *.class
+target/
+chat.db
+chat-smoke.db
+node0.out
+node0.err
